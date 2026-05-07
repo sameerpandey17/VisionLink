@@ -23,7 +23,7 @@ export default function App() {
       <header className="header">
         <div className="header-title">
           <div className="dot" style={{ backgroundColor: status === 'connected' ? '#22c55e' : '#ef4444' }} />
-          <h1>Face Detection Stream</h1>
+          <h1>VisionLink</h1>
         </div>
         <div className="status-indicator">
           {status === 'connected' ? 'LIVE SESSION' : 'SYSTEM OFFLINE'}

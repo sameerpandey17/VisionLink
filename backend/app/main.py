@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
     await broadcaster.shutdown()
 
 
-app = FastAPI(title="Face Detection Stream API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="VisionLink API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

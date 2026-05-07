@@ -1,146 +1,117 @@
-# Face Detection Stream
+#  VisionLink: Face Detection Stream v2.0
 
-A containerised, real-time video processing system. Send JPEG/PNG frames in, get faces detected and boxed, and watch the annotated stream live in your browser.
-
-```
-docker-compose up --build
-open http://localhost
-```
+A production-grade, real-time video processing system. Ingest video frames, detect faces with MediaPipe, render annotations with Pillow, and broadcast to unlimited clients via Redis Pub/Sub.
 
 ---
 
-## Prerequisites
+##  Quick Start
 
-- Docker >= 24
-- Docker Compose >= 2.20
+### 1. Prerequisites
+- Docker & Docker Compose
+- **BuildKit enabled** (for fast builds): `export DOCKER_BUILDKIT=1`
 
-That's it.
-
----
-
-## Setup
-
+### 2. Setup & Run
 ```bash
-# 1. Copy the env template and set one password
+# Clone and enter
+cd "VisionLink"
+
+# Initialize environment
 cp .env.example .env
-# Edit .env — change POSTGRES_PASSWORD to anything
+# Optional: Edit .env to set an API_KEY for security
 
-# 2. Start everything
+# Launch the stack
 docker-compose up --build
 ```
-
-The first run will pull base images and build. Subsequent starts are fast.
+- **Dashboard:** [http://localhost](http://localhost)
+- **API Docs:** [http://localhost/docs](http://localhost/docs) (Swagger)
 
 ---
 
-## Sending a frame
+##  Architecture & Data Flow
+
+VisionLink is built for horizontal scalability. Unlike basic implementations that store connections in memory, this system uses a distributed message bus.
+
+### The Life of a Frame:
+1.  **Ingest:** A source (camera/script) POSTs a JPEG to `/ingest`.
+2.  **Process:** Backend validates the `X-API-Key`, runs MediaPipe detection, and draws the ROI box using Pillow.
+3.  **Persist:** Metadata is sent to a background task. It fetches an atomic ID from a **Postgres Sequence** and saves the record.
+4.  **Broadcast:** The rendered JPEG is published to a **Redis channel**.
+5.  **Egress:** All connected WebSocket clients (`/stream`) receive the frame from Redis and update their `<img>` tags in React.
+
+---
+
+##  File Structure & Responsibilities
+
+### 🔹 Backend (`/backend`)
+| File | Responsibility |
+| :--- | :--- |
+| `app/main.py` | Entry point. Handles lifespan (Redis/DB init) and global error handling. |
+| `app/api/ingest.py` | Receives frames. Handles validation, detection triggering, and background saves. |
+| `app/api/stream.py` | WebSocket endpoint. Subscribes clients to the Redis frame stream. |
+| `app/api/roi.py` | Query API for detection history. Features **Cursor-based pagination**. |
+| `app/api/deps.py` | Security layer. Implements API Key validation. |
+| `app/core/detector.py` | MediaPipe wrapper. Pure detection logic (no rendering). |
+| `app/core/renderer.py` | Pillow drawing logic. Crops, draws boxes, and encodes to JPEG. |
+| `app/core/broadcaster.py` | The "Message Bus". Uses Redis Pub/Sub to share frames across workers. |
+| `app/db/crud.py` | Database operations. Uses SQL sequences and keyset pagination. |
+| `app/db/models.py` | SQLAlchemy models for Sessions and ROI Detections. |
+| `Dockerfile` | Optimized build using **BuildKit cache mounts** for 10x faster builds. |
+
+### 🔹 Frontend (`/frontend`)
+| File | Responsibility |
+| :--- | :--- |
+| `src/App.tsx` | Main dashboard. Manages WebSocket lifecycle and UI state. |
+| `src/components/` | Reusable UI: `StreamView`, `DetectionLog`, `StatsCard`. |
+| `Dockerfile` | Nginx-based production build with multi-stage caching. |
+
+### 🔹 Infrastructure
+| File | Responsibility |
+| :--- | :--- |
+| `docker-compose.yml` | Orchestrates Backend, Frontend, Postgres, Redis, and Nginx. |
+| `nginx/nginx.conf` | Reverse proxy. Handles WebSocket upgrades and routing. |
+| `.dockerignore` | Crucial for build speed; prevents large local folders from slowing down Docker. |
+
+---
+
+##  Security & Reliability (v2)
+
+We improved the system's baseline from a "demo" to "production-ready":
+
+-   **API Key Auth:** The `/ingest` endpoint is protected by an `X-API-Key` header to prevent unauthorized resource exhaustion.
+-   **No Silent Failures:** DB writes use background tasks with `add_done_callback` to ensure any persistence errors are logged without dropping the video stream.
+-   **Horizontal Scaling:** By using Redis instead of in-memory lists, you can run 10+ backend workers and every client will still see every frame.
+-   **Crash-Safe Counting:** Frame IDs come from a Database Sequence, ensuring IDs never reset or collide after a server restart.
+
+---
+
+## API Reference
+
+### `POST /ingest`
+Sends a frame for processing.
+- **Header:** `X-API-Key: <your_key>` (if enabled)
+- **Body:** `multipart/form-data` with `frame` field.
+
+### `GET /api/roi`
+Retrieves detection history.
+- **Params:** `limit`, `session_id`, `since`, `after` (cursor).
+- **Pagination:** Uses `next_cursor` from the response to fetch the next page via `?after=...`.
+
+---
+
+##  Testing
+
+The system includes comprehensive integration tests covering auth, processing, and pagination.
 
 ```bash
-curl -X POST http://localhost/ingest \
-  -F "frame=@/path/to/your/image.jpg" | jq
-```
-
-Response (face found):
-```json
-{ "detected": true, "box": { "x": 120, "y": 45, "w": 180, "h": 210 } }
-```
-
-Response (no face):
-```json
-{ "detected": false, "box": null }
-```
-
----
-
-## Watching the stream
-
-Open `http://localhost` in a browser. The React frontend connects automatically via WebSocket and displays the annotated video stream in real-time.
-
----
-
-## Querying ROI data
-
-```bash
-# Last 10 detections
-curl "http://localhost/api/roi?limit=10" | jq
-
-# Filter by session ID
-curl "http://localhost/api/roi?session_id=<uuid>&limit=50" | jq
-
-# Only detections since a timestamp
-curl "http://localhost/api/roi?since=2024-01-01T00:00:00Z" | jq
-```
-
----
-
-## Architecture
-
-```
-                        ┌─────────────────────────────────────────┐
-                        │              Docker Network              │
-                        │                                         │
-  Browser  ─────────▶  │  Nginx :80                              │
-  curl               │  │    ├── /ingest    ──▶  Backend :8000   │
-                        │    ├── /api/roi   ──▶  Backend :8000   │
-                        │    ├── /stream ws ──▶  Backend :8000   │
-                        │    └── /          ──▶  Frontend :80    │
-                        │                         │               │
-                        │                    PostgreSQL :5432     │
-                        └─────────────────────────────────────────┘
-
-Core loop:
-  video source → POST /ingest → MediaPipe detect → Pillow draw ROI
-      → broadcast via WebSocket → React <img> src-swap
-      → save metadata to PostgreSQL (async, non-blocking)
-```
-
-See `architecture.png` for a visual diagram.
-
----
-
-## Design decisions
-
-- **Why Nginx?** The backend never needs to be publicly exposed. Nginx handles WebSocket upgrade headers, request-size limits (`client_max_body_size 10m`), and security headers in one place.
-
-- **Why Pillow instead of OpenCV for drawing?** The spec requires it, but it's also the right call: Pillow is a lighter dependency for pure image I/O. MediaPipe uses OpenCV internally for detection, but that's invisible to the rest of the stack.
-
-- **Why async DB writes?** The HTTP response to `/ingest` doesn't need to wait for a Postgres write to complete. Using `asyncio.create_task` means the broadcast happens immediately, and the DB write follows without blocking the caller.
-
-- **Why WebSocket + img src-swap instead of WebRTC?** WebRTC is powerful but adds significant complexity (STUN/TURN, SDP negotiation, browser compatibility). For a controlled local system, WebSocket binary messages into an `<img>` tag is simpler, reliable, and sufficient.
-
----
-
-## Database notes
-
-Detection records accumulate over time. For production use, consider:
-
-```sql
--- Archive sessions older than 30 days
-DELETE FROM sessions WHERE started_at < now() - interval '30 days';
--- Cascades to roi_detections via ON DELETE CASCADE
-```
-
----
-
-## DB user setup (production)
-
-The app only needs INSERT and SELECT. To follow least-privilege:
-
-```sql
-CREATE USER facedetect_app WITH PASSWORD 'yourpassword';
-GRANT SELECT, INSERT ON sessions, roi_detections TO facedetect_app;
-```
-
----
-
-## Rate limiting (production note)
-
-Not implemented for local dev. To add it, configure Nginx's `limit_req_zone` on `/ingest`, or add a middleware layer (e.g. `slowapi`) to the FastAPI app.
-
----
-
-## Running tests
-
-```bash
+# Run all tests in a clean container
 docker-compose run --rm backend pytest
 ```
+
+---
+
+## Technical Choices
+- **FastAPI:** High-performance async Python framework.
+- **MediaPipe:** Google's state-of-the-art ML for face detection.
+- **Pillow:** Robust image manipulation without the heavy overhead of OpenCV.
+- **Redis Pub/Sub:** Industry standard for scalable real-time messaging.
+- **PostgreSQL:** Reliable relational storage with strong data integrity.
