@@ -1,27 +1,29 @@
 /**
  * StatsPanel
  *
- * Displays live stream statistics: connection status, frames received, and
- * a derived FPS estimate. Purely presentational — all data comes from props.
+ * Displays live stream statistics in a sleek vertical grid.
  */
 export default function StatsPanel({ status, frameCount }) {
   return (
-    <div className="stats-panel" role="status" aria-live="polite">
-      <div className="stat">
-        <span className="stat-label">Connection</span>
-        <span className="stat-value" style={{ color: status === 'connected' ? '#22c55e' : '#ef4444' }}>
-          {status.charAt(0).toUpperCase() + status.slice(1)}
-        </span>
-      </div>
-      <div className="stat">
-        <span className="stat-label">Frames received</span>
-        <span className="stat-value">{frameCount.toLocaleString()}</span>
-      </div>
-      <div className="stat">
-        <span className="stat-label">Stream source</span>
-        <span className="stat-value" style={{ fontSize: '0.9rem', color: '#94a3b8' }}>
-          /stream
-        </span>
+    <div className="card" role="status" aria-live="polite">
+      <h2 className="card-title">System Metrics</h2>
+      <div className="stats-grid">
+        <div className="stat-item">
+          <span className="stat-label">Connection State</span>
+          <span className="stat-value" style={{ color: status === 'connected' ? 'var(--success)' : 'var(--error)' }}>
+            {status.toUpperCase()}
+          </span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-label">Total Frames</span>
+          <span className="stat-value">{frameCount.toLocaleString()}</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-label">Stream Source</span>
+          <span className="stat-value" style={{ fontSize: '1rem', color: 'var(--accent-primary)' }}>
+            WebSocket
+          </span>
+        </div>
       </div>
     </div>
   )
