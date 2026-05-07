@@ -1,16 +1,16 @@
 import asyncio
-import itertools
 import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_api_key
 from app.config import settings
-from app.core.broadcaster import manager
+from app.core.broadcaster import broadcaster
 from app.core.detector import detect_face
 from app.core.renderer import draw_roi
-from app.db.crud import save_detection
+from app.db.crud import get_next_frame_id, save_detection
 from app.db.schemas import BoundingBoxOut, IngestResponse
 from app.db.session import get_session
 
@@ -23,10 +23,9 @@ MAGIC_BYTES: dict[bytes, str] = {
     b"\x89PNG\r\n": "image/png",
 }
 
-# Monotonic frame counter per session (simplified — single-process only)
-_frame_counter = itertools.count(1)
-
-# Default session ID for this server run (one session per process start)
+# Default session ID for this server run (one session per process start).
+# Production improvement: accept session_id as a request parameter so callers
+# can group related frames into named sessions.
 DEFAULT_SESSION_ID = uuid.uuid4()
 
 
@@ -35,24 +34,71 @@ def _check_magic(data: bytes) -> str:
     for magic, mime in MAGIC_BYTES.items():
         if data[: len(magic)] == magic:
             return mime
-    raise HTTPException(status_code=415, detail="Unsupported file type. Only JPEG and PNG are accepted.")
+    raise HTTPException(
+        status_code=415,
+        detail="Unsupported file type. Only JPEG and PNG are accepted.",
+    )
 
 
-@router.post("/ingest", response_model=IngestResponse)
+def _on_save_done(task: asyncio.Task) -> None:
+    """
+    Callback attached to background DB save tasks.
+
+    IDENTIFIED ISSUE — Silent Data Loss
+    -------------------------------------
+    The original code used:
+
+        asyncio.create_task(save_detection(...))
+
+    With no callback, any exception raised inside save_detection() is
+    silently swallowed. Python will emit a "Task exception was never
+    retrieved" RuntimeWarning to stderr at GC time — but only if the
+    process is shutting down. During normal operation: complete silence.
+
+    FIX
+    ---
+    By attaching this callback via task.add_done_callback(), we guarantee:
+      1. Any DB write failure is logged as ERROR (visible in docker logs).
+      2. The failure does NOT crash the ingest handler or drop the frame
+         from the broadcast — the client still sees the video.
+      3. No retry logic (by design) — frames are high-frequency and
+         retrying stale data has no value. The important thing is knowing
+         the metadata was lost so you can investigate the DB connection.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error(
+            "Background DB save failed — detection metadata NOT persisted: %s",
+            exc,
+            exc_info=exc,
+        )
+
+
+@router.post(
+    "/ingest",
+    response_model=IngestResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def ingest_frame(
     frame: UploadFile,
     db: AsyncSession = Depends(get_session),
 ) -> IngestResponse:
     """
-    Receive a raw video frame, detect faces, broadcast the rendered frame, and
-    persist detection metadata.
+    Receive a raw video frame, detect faces, broadcast the rendered frame,
+    and persist detection metadata.
+
+    Authentication:
+      Requires X-API-Key header when API_KEY env var is set.
+      Returns 401 if the key is missing or wrong.
 
     Steps:
       1. Validate file size (< 10 MB) and magic bytes (JPEG / PNG).
       2. Run MediaPipe face detection.
       3. Draw ROI with Pillow if a face was found; otherwise use original bytes.
-      4. Fire-and-forget DB write (doesn't block the response).
-      5. Broadcast rendered frame to all WebSocket subscribers.
+      4. Fire-and-forget DB write with error callback (doesn't block response).
+      5. Publish rendered frame to Redis channel (broadcasts to all WebSocket clients).
       6. Return detection result.
     """
     raw = await frame.read()
@@ -81,15 +127,14 @@ async def ingest_frame(
         logger.warning("Pillow failed to decode frame; using original bytes.")
         rendered = raw
 
-    # 4. DB write — fire and forget so the HTTP response isn't blocked
+    # 4. DB write — fire and forget with error logging callback
     if box is not None:
-        frame_id = next(_frame_counter)
-        asyncio.create_task(
-            save_detection(db, DEFAULT_SESSION_ID, frame_id, box)
-        )
+        frame_id = await get_next_frame_id(db)  # Atomic PG sequence — no duplicates
+        task = asyncio.create_task(save_detection(db, DEFAULT_SESSION_ID, frame_id, box))
+        task.add_done_callback(_on_save_done)  # Logs any failure; never raises
 
-    # 5. Broadcast (no clients = no-op, never errors)
-    await manager.broadcast_bytes(rendered)
+    # 5. Broadcast via Redis (reaches all workers, not just this process)
+    await broadcaster.publish(rendered)
 
     # 6. Response
     box_out = BoundingBoxOut(x=box.x, y=box.y, w=box.width, h=box.height) if box else None

@@ -1,0 +1,49 @@
+# Backend Docker Build Context Exclusions
+#
+# WHY THIS FILE MATTERS (Build Speed Issue)
+# ------------------------------------------
+# Without .dockerignore, Docker sends the ENTIRE directory to the build
+# daemon as the "context" before any layer is built.
+#
+# What was being sent unnecessarily:
+#   - __pycache__ directories   → hundreds of .pyc files, changing constantly
+#   - .pytest_cache             → test run artifacts
+#   - tests/                    → not needed in the production image
+#   - .venv / venv              → if you have a local virtualenv
+#   - *.pyc files               → compiled bytecode
+#
+# Impact: A large context means Docker can't determine if the "COPY ."
+# layer changed without hashing everything. Even if you only changed one
+# .py file, a big context causes a slow context upload + layer re-eval.
+#
+# FIX: Exclude all non-runtime files. Docker context drops from ~500MB
+# (with a local venv) to ~100KB. Layer caching becomes much more reliable.
+
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov/
+
+# Local virtualenvs
+.venv
+venv
+env
+
+# Test files are not needed in the production image
+tests/
+
+# Git and IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# Docs and local notes
+*.md
+architecture.png

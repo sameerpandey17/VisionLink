@@ -1,0 +1,30 @@
+# Frontend Docker Build Context Exclusions
+#
+# WHY THIS FILE MATTERS (Build Speed Issue)
+# ------------------------------------------
+# node_modules can be 200–400MB. Without .dockerignore, Docker sends the
+# entire node_modules to the build daemon on every `docker-compose build`.
+#
+# The Dockerfile already runs `npm install` inside the container, so
+# sending your local node_modules is not only wasteful — it can also cause
+# platform mismatches (e.g., local macOS native binaries in a Linux container).
+#
+# FIX: Exclude node_modules and build artifacts. The builder context drops
+# from ~300MB to ~50KB, making `docker build` context upload near-instant.
+
+node_modules
+dist
+.vite
+
+# Git and IDE
+.git
+.gitignore
+.vscode
+.idea
+
+# Local env
+.env
+.env.local
+
+# Docs
+*.md

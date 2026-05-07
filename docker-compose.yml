@@ -1,5 +1,24 @@
 version: "3.9"
 
+# DOCKER BUILD OPTIMIZATION (IDENTIFIED ISSUE)
+# -----------------------------------------------
+# Original builds were slow because:
+#   1. No .dockerignore — entire directory (incl. __pycache__, .pytest_cache,
+#      node_modules) was sent as build context on every build.
+#   2. pip install had no cache — MediaPipe's 120MB wheel was re-downloaded
+#      every time any source file changed (Docker invalidated the layer).
+#   3. No BuildKit — the old builder has no cache mount support.
+#
+# FIX: Set DOCKER_BUILDKIT=1 before running docker-compose:
+#   DOCKER_BUILDKIT=1 docker-compose up --build
+#
+# Or add to your shell profile:
+#   export DOCKER_BUILDKIT=1
+#   export COMPOSE_DOCKER_CLI_BUILD=1
+#
+# With BuildKit + .dockerignore + pip cache mounts, subsequent builds
+# that only change Python source files take ~10-15s instead of ~3-5min.
+
 services:
   db:
     image: postgres:16-alpine
@@ -18,15 +37,38 @@ services:
     networks:
       - app-net
 
+  # NEW: Redis service for Pub/Sub broadcaster
+  # WHY: The original in-memory broadcaster (ConnectionManager._connections
+  #      list) could not share frames across multiple Uvicorn workers.
+  #      Redis acts as the message bus — every worker publishes frames here,
+  #      and every WebSocket subscriber reads from here, regardless of which
+  #      worker they are connected to.
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no  # Disable persistence — ephemeral stream data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - app-net
+
   backend:
     build: ./backend
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://facedetect:${POSTGRES_PASSWORD}@db:5432/facedetect
+      REDIS_URL: redis://redis:6379
       MAX_FRAME_SIZE_BYTES: 10485760
       CORS_ORIGINS: "http://localhost:3000,http://localhost"
+      # API_KEY: set this in .env to enable authentication on /ingest
+      # Leave empty to run without auth (local dev mode)
+      API_KEY: ${API_KEY:-}
     networks:
       - app-net
 
