@@ -20,7 +20,7 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --prefer-offline
+    npm install --prefer-offline
 
 COPY . .
 RUN npm run build

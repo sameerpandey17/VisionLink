@@ -9,11 +9,17 @@ class BoundingBoxOut(BaseModel):
     y: int
     w: int
     h: int
+    expression: str | None = None
+    emoji: str | None = None
+    message: str | None = None
 
 
 class IngestResponse(BaseModel):
     detected: bool
     box: BoundingBoxOut | None
+    expression: str | None = None
+    emoji: str | None = None
+    message: str | None = None
 
 
 class DetectionRecord(BaseModel):
@@ -26,6 +32,8 @@ class DetectionRecord(BaseModel):
     height: int
     confidence: float
     frame_id: int
+    expression: str | None = None
+    emoji: str | None = None
 
     class Config:
         from_attributes = True

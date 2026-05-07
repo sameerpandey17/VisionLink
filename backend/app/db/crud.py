@@ -67,6 +67,8 @@ async def save_detection(
         width=box.width,
         height=box.height,
         confidence=box.confidence,
+        expression=box.expression,
+        emoji=box.emoji,
     )
     db.add(record)
     await db.commit()

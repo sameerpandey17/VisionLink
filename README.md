@@ -1,10 +1,18 @@
-#  VisionLink: Face Detection Stream v2.0
+# VisionLink: Emotion Detection Dashboard v2.0
 
-A production-grade, real-time video processing system. Ingest video frames, detect faces with MediaPipe, render annotations with Pillow, and broadcast to unlimited clients via Redis Pub/Sub.
+A production-grade, real-time video processing system featuring a bright, joyful, and modern flat UI. Ingest video frames, detect faces and emotions with MediaPipe, render a live floating emoji HUD, and broadcast to unlimited clients via Redis Pub/Sub.
 
 ---
 
-##  Quick Start
+## ✨ What's New in v2.0
+- **Joyful UI Design:** Completely redesigned with a warm, flat color palette (Sunrise Orange, Lemon Yellow, Mint Green, and Deep Navy) for a delightful user experience.
+- **Real-Time Emotion Detection:** Analyzes facial expressions dynamically and identifies emotions (Happy, Surprise, Angry, Sad, Wink, Neutral).
+- **Floating Emoji HUD:** A floating DOM-based HUD displays cheerful emojis reacting to the detected emotion along with contextual supportive text.
+- **Optimized Heuristics:** Normalized spatial ratio heuristics mean emotion detection works perfectly regardless of camera distance.
+
+---
+
+## 🚀 Quick Start
 
 ### 1. Prerequisites
 - Docker & Docker Compose
@@ -27,20 +35,20 @@ docker-compose up --build
 
 ---
 
-##  Architecture & Data Flow
+## 🏗️ Architecture & Data Flow
 
 VisionLink is built for horizontal scalability. Unlike basic implementations that store connections in memory, this system uses a distributed message bus.
 
 ### The Life of a Frame:
-1.  **Ingest:** A source (camera/script) POSTs a JPEG to `/ingest`.
-2.  **Process:** Backend validates the `X-API-Key`, runs MediaPipe detection, and draws the ROI box using Pillow.
+1.  **Ingest:** A source (camera/script) POSTs a JPEG to `/api/ingest`.
+2.  **Process:** Backend validates the `X-API-Key`, runs MediaPipe face & emotion detection, and logs coordinates.
 3.  **Persist:** Metadata is sent to a background task. It fetches an atomic ID from a **Postgres Sequence** and saves the record.
 4.  **Broadcast:** The rendered JPEG is published to a **Redis channel**.
-5.  **Egress:** All connected WebSocket clients (`/stream`) receive the frame from Redis and update their `<img>` tags in React.
+5.  **Egress:** All connected WebSocket clients (`/api/stream`) receive the frame from Redis and update their views in React.
 
 ---
 
-##  File Structure & Responsibilities
+## 📂 File Structure & Responsibilities
 
 ### 🔹 Backend (`/backend`)
 | File | Responsibility |
@@ -50,43 +58,38 @@ VisionLink is built for horizontal scalability. Unlike basic implementations tha
 | `app/api/stream.py` | WebSocket endpoint. Subscribes clients to the Redis frame stream. |
 | `app/api/roi.py` | Query API for detection history. Features **Cursor-based pagination**. |
 | `app/api/deps.py` | Security layer. Implements API Key validation. |
-| `app/core/detector.py` | MediaPipe wrapper. Pure detection logic (no rendering). |
-| `app/core/renderer.py` | Pillow drawing logic. Crops, draws boxes, and encodes to JPEG. |
+| `app/core/detector.py` | MediaPipe wrapper. Includes advanced normalized spatial logic for robust emotion heuristics. |
 | `app/core/broadcaster.py` | The "Message Bus". Uses Redis Pub/Sub to share frames across workers. |
 | `app/db/crud.py` | Database operations. Uses SQL sequences and keyset pagination. |
-| `app/db/models.py` | SQLAlchemy models for Sessions and ROI Detections. |
 | `Dockerfile` | Optimized build using **BuildKit cache mounts** for 10x faster builds. |
 
 ### 🔹 Frontend (`/frontend`)
 | File | Responsibility |
 | :--- | :--- |
-| `src/App.tsx` | Main dashboard. Manages WebSocket lifecycle and UI state. |
-| `src/components/` | Reusable UI: `StreamView`, `DetectionLog`, `StatsCard`. |
+| `src/App.jsx` | Main dashboard. Manages WebSocket lifecycle, UI state, and the floating emoji HUD. |
+| `src/components/` | Reusable UI: `VideoStream`, `RoiCanvas`, `StatsPanel`, `DetectionTimeline`. |
+| `src/index.css` | Global styling featuring the bright, clean, flat UI and modern color palette. |
 | `Dockerfile` | Nginx-based production build with multi-stage caching. |
 
 ### 🔹 Infrastructure
 | File | Responsibility |
 | :--- | :--- |
 | `docker-compose.yml` | Orchestrates Backend, Frontend, Postgres, Redis, and Nginx. |
-| `nginx/nginx.conf` | Reverse proxy. Handles WebSocket upgrades and routing. |
-| `.dockerignore` | Crucial for build speed; prevents large local folders from slowing down Docker. |
+| `nginx/nginx.conf` | Reverse proxy. Handles WebSocket upgrades and unified `/api/` routing. |
 
 ---
 
-##  Security & Reliability (v2)
+## 🔒 Security & Reliability
 
-We improved the system's baseline from a "demo" to "production-ready":
-
--   **API Key Auth:** The `/ingest` endpoint is protected by an `X-API-Key` header to prevent unauthorized resource exhaustion.
--   **No Silent Failures:** DB writes use background tasks with `add_done_callback` to ensure any persistence errors are logged without dropping the video stream.
--   **Horizontal Scaling:** By using Redis instead of in-memory lists, you can run 10+ backend workers and every client will still see every frame.
--   **Crash-Safe Counting:** Frame IDs come from a Database Sequence, ensuring IDs never reset or collide after a server restart.
+- **API Key Auth:** The `/api/ingest` endpoint is protected by an `X-API-Key` header to prevent unauthorized resource exhaustion.
+- **No Silent Failures:** DB writes use background tasks with `add_done_callback` to ensure persistence errors are logged.
+- **Horizontal Scaling:** By using Redis instead of in-memory lists, you can run multiple backend workers and sync state seamlessly.
 
 ---
 
-## API Reference
+## 🔌 API Reference
 
-### `POST /ingest`
+### `POST /api/ingest`
 Sends a frame for processing.
 - **Header:** `X-API-Key: <your_key>` (if enabled)
 - **Body:** `multipart/form-data` with `frame` field.
@@ -98,7 +101,7 @@ Retrieves detection history.
 
 ---
 
-##  Testing
+## 🧪 Testing
 
 The system includes comprehensive integration tests covering auth, processing, and pagination.
 
@@ -109,9 +112,20 @@ docker-compose run --rm backend pytest
 
 ---
 
-## Technical Choices
+## 🛠️ Technical Choices
 - **FastAPI:** High-performance async Python framework.
-- **MediaPipe:** Google's state-of-the-art ML for face detection.
-- **Pillow:** Robust image manipulation without the heavy overhead of OpenCV.
+- **MediaPipe Face Mesh:** State-of-the-art ML for low-latency facial landmark detection.
+- **React + Framer Motion:** Joyful frontend animations and reactive UI updates.
 - **Redis Pub/Sub:** Industry standard for scalable real-time messaging.
 - **PostgreSQL:** Reliable relational storage with strong data integrity.
+
+---
+
+## AI Collaboration Attestation
+
+This project was built with a deliberate and strategic approach to AI collaboration, ensuring that I remained the primary architect and driver of the system. I did not "vibe code" this project; rather, I used AI as a targeted force multiplier.
+
+*   **Backend Engineering (Core Expertise):** As a backend-focused engineer, I designed the system architecture, established the database schema, devised the real-time WebSocket + Redis pub/sub mechanism, and solved the tricky spatial logic required for emotion heuristics without OpenCV. AI was utilized strictly as an advanced autocomplete to quickly scaffold repetitive boilerplate (e.g., Pydantic models, FastAPI route structures, and basic CRUD shells). The core logic, security practices, and structural decisions are entirely my own.
+*   **Frontend Development (Enabling Capability):** Since frontend is not my primary domain, I leveraged AI more heavily to generate the React components, CSS styling, and responsive layout. This allowed me to deliver a polished, full-stack, and high-craft UI that meets modern design standards without getting bogged down in CSS intricacies.
+
+**The Takeaway:** This dual approach highlights my ability to use AI pragmatically: as a high-speed assistant in my areas of expertise (to ship faster without losing architectural control), and as a powerful enabler in unfamiliar domains (to deliver complete, end-to-end solutions independently).

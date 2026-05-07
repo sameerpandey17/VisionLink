@@ -74,6 +74,7 @@ class RedisBroadcaster:
         self._redis = await aioredis.from_url(
             settings.redis_url,
             decode_responses=False,  # We transmit raw JPEG bytes, not strings
+            max_connections=100,    # Allow high concurrency for pub/sub subscribers
         )
         logger.info("Redis broadcaster connected → %s", settings.redis_url)
 

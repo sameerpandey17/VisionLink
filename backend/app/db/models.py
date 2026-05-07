@@ -43,6 +43,8 @@ class RoiDetection(Base):
     width: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     height: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     confidence: Mapped[float] = mapped_column(sa.Float, nullable=False)
+    expression: Mapped[str | None] = mapped_column(sa.String(32), nullable=True)
+    emoji: Mapped[str | None] = mapped_column(sa.String(8), nullable=True)
 
     __table_args__ = (
         sa.CheckConstraint("x >= 0 AND y >= 0 AND width > 0 AND height > 0", name="positive_coords"),

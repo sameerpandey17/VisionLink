@@ -1,139 +1,120 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react'
 
-export default function CameraControl({ onStatusChange }) {
-  const [isRecording, setIsRecording] = useState(false);
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const loopRef = useRef(null);
+export default function CameraControl() {
+  const [isRecording, setIsRecording] = useState(false)
+  const [fps, setFps] = useState(0)
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
+  const streamRef = useRef(null)
+  const loopRef = useRef(false)
+  const lastFrameTime = useRef(Date.now())
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720, frameRate: { ideal: 30 } }
+      })
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play(); // Explicitly start playback
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
       }
-      streamRef.current = stream;
-      setIsRecording(true);
-      onStatusChange && onStatusChange('Transmitting...');
-      
-      // Start ingestion loop
-      loopRef.current = setInterval(sendFrame, 100); // 10 FPS
+      streamRef.current = stream
+      loopRef.current = true
+      setIsRecording(true)
+      transmitLoop()
     } catch (err) {
-      console.error("Error accessing camera:", err);
-      alert("Could not access camera. Please allow permissions.");
+      console.error('Camera error:', err)
     }
-  };
+  }
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    setIsRecording(false);
-    clearInterval(loopRef.current);
-    onStatusChange && onStatusChange('Stopped');
-  };
+    loopRef.current = false
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    setIsRecording(false)
+    setFps(0)
+  }
+
+  const transmitLoop = async () => {
+    if (!loopRef.current) return
+    const t0 = Date.now()
+    await sendFrame()
+    setTimeout(transmitLoop, Math.max(0, 100 - (Date.now() - t0)))
+  }
 
   const sendFrame = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
-      canvas.toBlob(async (blob) => {
-        if (!blob) return;
-        
-        const formData = new FormData();
-        formData.append('frame', blob, 'camera_frame.jpg');
-        
-        try {
-          const res = await fetch('/ingest', {
-            method: 'POST',
-            body: formData
-          });
-          if (!res.ok) {
-            console.error("Ingest failed:", res.statusText);
-          }
-        } catch (err) {
-          console.error("Error sending frame:", err);
-        }
-      }, 'image/jpeg', 0.8);
-    }
-  };
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    if (!video || !canvas || video.readyState < 2) return
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    canvas.getContext('2d').drawImage(video, 0, 0)
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.8))
+    if (!blob) return
+    const form = new FormData()
+    form.append('frame', blob, 'frame.jpg')
+    try {
+      await fetch('/api/ingest', { method: 'POST', body: form })
+      const now = Date.now()
+      setFps(Math.round(1000 / (now - lastFrameTime.current)))
+      lastFrameTime.current = now
+    } catch { /* network hiccup, skip */ }
+  }
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
+  useEffect(() => () => stopCamera(), [])
 
   return (
-    <div className="card" style={{ marginTop: '1rem' }}>
-      <h2 className="card-title">Camera Ingestion</h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {/* Visible preview for local feedback */}
-        <div style={{ 
-          width: '100%', 
-          height: isRecording ? '120px' : '0', 
-          background: '#000', 
-          borderRadius: '8px', 
-          overflow: 'hidden',
-          transition: 'height 0.3s ease',
-          position: 'relative'
-        }}>
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            muted 
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-          />
-          {isRecording && (
-            <div style={{ 
-              position: 'absolute', 
-              top: '8px', 
-              right: '8px', 
-              width: '8px', 
-              height: '8px', 
-              background: '#ef4444', 
-              borderRadius: '50%',
-              boxShadow: '0 0 8px #ef4444'
-            }} />
-          )}
-        </div>
-
-        <button 
-          onClick={isRecording ? stopCamera : startCamera}
-          style={{
-            padding: '0.75rem',
-            backgroundColor: isRecording ? '#ef4444' : '#3b82f6',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            cursor: 'pointer',
-            fontWeight: '600',
-            transition: 'background-color 0.2s'
-          }}
-        >
-          {isRecording ? 'Stop Camera' : 'Start Camera'}
-        </button>
-        
-        <canvas ref={canvasRef} style={{ display: 'none' }} />
-        
+    <>
+      <div className="card-label">
+        Vision Input
         {isRecording && (
-          <div style={{ fontSize: '0.75rem', color: '#64748b', textAlign: 'center' }}>
-            Broadcasting 10 FPS to system
+          <span style={{
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: '0.625rem',
+            color: 'var(--pink)',
+            fontWeight: 700,
+            letterSpacing: '0.06em'
+          }}>
+            {fps} FPS
+          </span>
+        )}
+      </div>
+
+      {/* Preview */}
+      <div className={`camera-preview ${isRecording ? 'recording' : ''}`}>
+        {!isRecording && <div className="camera-standby">SENSOR STANDBY</div>}
+
+        <video
+          ref={videoRef}
+          autoPlay playsInline muted
+          style={{
+            width: '100%',
+            display: isRecording ? 'block' : 'none',
+            height: '150px',
+            objectFit: 'cover',
+          }}
+        />
+        <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+        {isRecording && (
+          <div className="live-tag">
+            <span style={{
+              width: 5, height: 5,
+              borderRadius: '50%',
+              background: 'var(--pink)',
+              display: 'inline-block',
+              animation: 'blink 1s step-end infinite'
+            }} />
+            LIVE
           </div>
         )}
       </div>
-    </div>
-  );
+
+      <button
+        className={`btn ${isRecording ? 'btn-danger' : 'btn-primary'}`}
+        onClick={isRecording ? stopCamera : startCamera}
+      >
+        {isRecording ? '⏹ Terminate Stream' : '▶ Initialize Vision'}
+      </button>
+    </>
+  )
 }
